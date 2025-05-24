@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/5aradise/distributed-system/httptools"
 	"github.com/5aradise/distributed-system/signal"
+)
+
+var (
+	errAllServersUnhealthy = errors.New("all servers are unhealthy")
 )
 
 var (
@@ -21,12 +27,17 @@ var (
 	traceEnabled = flag.Bool("trace", false, "whether to include tracing information into responses")
 )
 
+type server struct {
+	url     string
+	healthy atomic.Bool
+}
+
 var (
 	timeout     = time.Duration(*timeoutSec) * time.Second
-	serversPool = []string{
-		"server1:8080",
-		"server2:8080",
-		"server3:8080",
+	serversPool = []*server{
+		{url: "server1:8080"},
+		{url: "server2:8080"},
+		{url: "server3:8080"},
 	}
 )
 
@@ -86,22 +97,44 @@ func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
 	}
 }
 
+func chooseHealthy(i int) (string, error) {
+	for _, srv := range serversPool[i:] {
+		if srv.healthy.Load() {
+			return srv.url, nil
+		}
+	}
+	for _, srv := range serversPool[:i] {
+		if srv.healthy.Load() {
+			return srv.url, nil
+		}
+	}
+	return "", errAllServersUnhealthy
+}
+
 func main() {
 	flag.Parse()
 
-	// TODO: Використовуйте дані про стан сервера, щоб підтримувати список тих серверів, яким можна відправляти запит.
-	for _, server := range serversPool {
-		server := server
+	for _, srv := range serversPool {
 		go func() {
+			srv.healthy.Store(health(srv.url))
 			for range time.Tick(10 * time.Second) {
-				log.Println(server, "healthy:", health(server))
+				srv.healthy.Store(health(srv.url))
 			}
 		}()
 	}
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		// TODO: Реалізуйте свій алгоритм балансувальника.
-		forward(serversPool[0], rw, r)
+		serverIndex := int(hash(r.URL.Path)) % len(serversPool)
+		if serverIndex < 0 {
+			serverIndex = -serverIndex
+		}
+		dst, err := chooseHealthy(serverIndex)
+		if err != nil {
+			rw.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+
+		forward(dst, rw, r)
 	}))
 
 	log.Println("Starting load balancer...")
