@@ -33,7 +33,7 @@ func main() {
 
 	report := make(Report)
 
-	h.HandleFunc("/api/v1/some-data", func(rw http.ResponseWriter, r *http.Request) {
+	h.HandleFunc("/api/v1/some-data/", func(rw http.ResponseWriter, r *http.Request) {
 		respDelayString := os.Getenv(confResponseDelaySec)
 		if delaySec, parseErr := strconv.Atoi(respDelayString); parseErr == nil && delaySec > 0 && delaySec < 300 {
 			time.Sleep(time.Duration(delaySec) * time.Second)
