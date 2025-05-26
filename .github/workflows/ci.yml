@@ -18,35 +18,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Build Docker images and run unit tests
+      - name: Run tests using Docker Compose
         run: |
-          echo "Building images and running unit tests..."
-          docker build -t practice4-app .
-          echo "Unit tests completed successfully!"
-
-      - name: Run integration tests
-        run: |
-          echo "Starting integration tests..."
-          docker compose -f docker-compose.test.yaml up -d balancer server1 server2 server3
+          docker compose -f docker-compose.test.yaml up --build --abort-on-container-exit --exit-code-from test
           
-          echo "Waiting for services to start..."
-          sleep 10
-          
-          docker compose -f docker-compose.test.yaml up --abort-on-container-exit test
           
           TEST_RESULT=$?
-          
-          docker compose -f docker-compose.test.yaml down
-          
           if [ $TEST_RESULT -ne 0 ]; then
-            echo "Integration tests failed!"
-            exit 1
+            echo "Tests failed with exit code $TEST_RESULT"
+            exit $TEST_RESULT
           fi
-          
-          echo "Integration tests completed successfully!"
+          echo "All tests completed successfully!"
 
       - name: Cleanup
         if: always()
         run: |
           docker compose -f docker-compose.test.yaml down --volumes --remove-orphans
-          docker system prune -f
