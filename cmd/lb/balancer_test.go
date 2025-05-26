@@ -88,7 +88,3 @@ func (suite *BalancerTestSuite) TestForward_Unavailable() {
 func TestBalancer(t *testing.T) {
 	suite.Run(t, new(BalancerTestSuite))
 }
-
-func TestShouldFail(t *testing.T) {
-	t.Fatal("This test should fail")
-}
