@@ -8,5 +8,4 @@ if [ -z "$bin" ]; then
   exit 1
 fi
 
-# shellcheck disable=SC2068
 exec ./"$bin" $@
