@@ -12,5 +12,25 @@ services:
       - balancer
 
   balancer:
-    # Для тестів включаємо режим відлагодження, коли балансувальник додає інформацію, кому було відправлено запит.
+    build: .
     command: ["lb", "--trace=true"]
+    networks:
+      - servers
+
+  server1:
+    build: .
+    networks:
+      - servers
+
+  server2:
+    build: .
+    networks:
+      - servers
+
+  server3:
+    build: .
+    networks:
+      - servers
+
+networks:
+  servers:
