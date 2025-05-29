@@ -1,12 +1,16 @@
 package datastore
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestDb(t *testing.T) {
 	tmp := t.TempDir()
-	db, err := Open(tmp)
+	db, err := Open(tmp, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +65,7 @@ func TestDb(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		db, err = Open(tmp)
+		db, err = Open(tmp, 5)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,4 +85,56 @@ func TestDb(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestMergeSegments(t *testing.T) {
+	tmp := t.TempDir()
+	db, err := Open(tmp, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("key%d", i%3)
+		value := fmt.Sprintf("value%d", i)
+		if err := db.Put(key, value); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	expected := map[string]string{
+		"key0": "value9",
+		"key1": "value7",
+		"key2": "value8",
+	}
+
+	for k, v := range expected {
+		got, err := db.Get(k)
+		if err != nil {
+			t.Errorf("Get(%q) failed: %v", k, err)
+			continue
+		}
+		if got != v {
+			t.Errorf("Get(%q) = %q; want %q", k, got, v)
+		}
+	}
+
+	files, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("Failed to read dir: %v", err)
+	}
+
+	segmentCount := 0
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), "segment-") {
+			segmentCount++
+		}
+	}
+
+	if segmentCount < 2 {
+		t.Errorf("Expected multiple segments, got %d", segmentCount)
+	}
 }
