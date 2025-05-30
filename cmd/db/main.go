@@ -57,56 +57,54 @@ func main() {
 }
 
 func dbHandler(rw http.ResponseWriter, r *http.Request) {
+	trimmedPath := strings.TrimPrefix(r.URL.Path, "/db/")
+	if trimmedPath == "" || strings.Contains(trimmedPath, "/") {
+		http.Error(rw, "Invalid key in path. Expected /db/<key>", http.StatusBadRequest)
+		return
+	}
+	key := trimmedPath
+
 	switch r.Method {
 	case http.MethodGet:
-		key := r.URL.Query().Get("key")
-		if key == "" {
-			http.Error(rw, "Missing key parameter", http.StatusBadRequest)
-			return
-		}
-
-		value, err := db.Get(key)
-		if err != nil {
-			if err == datastore.ErrNotFound {
-				// Завдання: "Якщо дані в БД відсутні, ваш обробник має повертати код 404 з пустим тілом"
-				// Це стосується cmd/server, але для cmd/db теж логічно.
-				rw.WriteHeader(http.StatusNotFound)
-				return
-			}
-			log.Printf("Error getting value for key %s: %v", key, err)
-			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(rw).Encode(DbGetResponse{Key: key, Value: value}); err != nil {
-			log.Printf("Error encoding response for key %s: %v", key, err)
-		}
-
+		handleGet(rw, key)
 	case http.MethodPost:
-		trimmedPath := strings.TrimPrefix(r.URL.Path, "/db/")
-		if trimmedPath == "" || strings.Contains(trimmedPath, "/") {
-			http.Error(rw, "Invalid key in path. Expected /db/<key>", http.StatusBadRequest)
-			return
-		}
-		key := trimmedPath
-
-		var req DbPostRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(rw, fmt.Sprintf("Invalid JSON body: %v", err), http.StatusBadRequest)
-			return
-		}
-		defer r.Body.Close()
-
-		if err := db.Put(key, req.Value); err != nil {
-			log.Printf("Error putting value for key %s: %v", key, err)
-			http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-		rw.WriteHeader(http.StatusOK)
-
+		handlePost(rw, r, key)
 	default:
 		http.Error(rw, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func handleGet(rw http.ResponseWriter, key string) {
+	value, err := db.Get(key)
+	if err != nil {
+		if err == datastore.ErrNotFound {
+			rw.WriteHeader(http.StatusNotFound)
+			return
+		}
+		log.Printf("Error getting value for key %s: %v", key, err)
+		http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	rw.Header().Set("Content-Type", "application/json")
+	rw.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(rw).Encode(DbGetResponse{Key: key, Value: value}); err != nil {
+		log.Printf("Error encoding response for key %s: %v", key, err)
+	}
+}
+
+func handlePost(rw http.ResponseWriter, r *http.Request, key string) {
+	var req DbPostRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(rw, fmt.Sprintf("Invalid JSON body: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if err := db.Put(key, req.Value); err != nil {
+		log.Printf("Error putting value for key %s: %v", key, err)
+		http.Error(rw, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	rw.WriteHeader(http.StatusOK)
 }

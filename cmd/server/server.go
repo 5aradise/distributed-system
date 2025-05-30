@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	// "net/url" // Поки не потрібен, але може знадобитися для PathEscape, якщо ключі складні
 	"os"
 	"strconv"
 	"time"
@@ -22,7 +23,7 @@ const confHealthFailure = "CONF_HEALTH_FAILURE"
 
 const teamName = "faang"
 
-const dbServiceAddress = "http://db:8083"
+const dbServiceAddress = "http://db:8083" // Переконайся, що це порт твого db-сервісу
 
 type DbPostRequest struct {
 	Value string `json:"value"`
@@ -51,9 +52,8 @@ func main() {
 		}
 	})
 
-	report := make(Report) // Припускаю, що тип Report визначений десь у вашому коді
+	report := make(Report)
 
-	// Змінено шлях з "/api/v1/some-data/" на "/api/v1/some-data"
 	h.HandleFunc("/api/v1/some-data", func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(rw, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -65,7 +65,7 @@ func main() {
 			time.Sleep(time.Duration(delaySec) * time.Second)
 		}
 
-		report.Process(r) // Припускаю, що Process існує
+		report.Process(r)
 
 		requestKey := r.URL.Query().Get("key")
 		if requestKey == "" {
@@ -73,7 +73,17 @@ func main() {
 			return
 		}
 
-		dbURL := fmt.Sprintf("%s/db/?key=%s", dbServiceAddress, requestKey)
+		// --- ЗМІНА ТУТ ---
+		// Старий варіант: dbURL := fmt.Sprintf("%s/db/?key=%s", dbServiceAddress, requestKey)
+		// Новий варіант для GET /db/<key>:
+		// Якщо requestKey може містити спецсимволи, які ламають URL шлях (наприклад, '/', '?'),
+		// то потрібно використовувати url.PathEscape(requestKey).
+		// Для простих ключів типу "faang" це не обов'язково.
+		dbURL := fmt.Sprintf("%s/db/%s", dbServiceAddress, requestKey)
+		// --- КІНЕЦЬ ЗМІНИ ---
+
+		log.Printf("Querying DB service at URL: %s", dbURL) // Додав лог для відладки
+
 		resp, err := http.DefaultClient.Get(dbURL)
 		if err != nil {
 			log.Printf("Error querying db service: %v", err)
@@ -88,7 +98,7 @@ func main() {
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			log.Printf("DB service returned non-OK status: %d for key %s", resp.StatusCode, requestKey)
+			log.Printf("DB service returned non-OK status: %d for key %s. URL: %s", resp.StatusCode, requestKey, dbURL)
 			http.Error(rw, "Database service error", http.StatusInternalServerError)
 			return
 		}
@@ -118,6 +128,8 @@ func main() {
 }
 
 func initializeDataInDB() {
+	// Зачекаємо трохи, щоб дати сервісу db час на запуск.
+	// В ідеалі, тут потрібен механізм retry або перевірка доступності.
 	time.Sleep(5 * time.Second)
 
 	currentDate := time.Now().Format("2006-01-02")
@@ -130,7 +142,8 @@ func initializeDataInDB() {
 		return
 	}
 
-	dbURL := fmt.Sprintf("%s/db/%s", dbServiceAddress, dbKey) // POST /db/<teamName>
+	// URL для POST /db/<teamName> - тут все правильно, ключ в шляху.
+	dbURL := fmt.Sprintf("%s/db/%s", dbServiceAddress, dbKey)
 	req, err := http.NewRequest(http.MethodPost, dbURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		log.Printf("Error creating request for db init: %v", err)
@@ -145,7 +158,7 @@ func initializeDataInDB() {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated { // Додав перевірку на 201 Created
 		log.Printf("DB service returned non-OK status for initial POST: %d. URL: %s", resp.StatusCode, dbURL)
 		return
 	}
