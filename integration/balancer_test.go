@@ -1,7 +1,10 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"testing"
@@ -13,12 +16,17 @@ import (
 
 const (
 	baseAddress   = "http://balancer:8090"
-	apiPath       = "/api/v1/some-data/"
+	apiBasePath   = "/api/v1/some-data"
+	teamName      = "faang"
 	numIterations = 15
 )
 
 var client = http.Client{
-	Timeout: 3 * time.Second,
+	Timeout: 10 * time.Second,
+}
+
+type ApiDataResponse struct {
+	Data string `json:"data"`
 }
 
 func TestBalancer(t *testing.T) {
@@ -26,45 +34,68 @@ func TestBalancer(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
-	t.Run("Distribution", checkDistribution)
-	t.Run("Consistency", checkConsistency)
-}
+	t.Run("GetDataWithTeamKey", func(t *testing.T) {
+		url := fmt.Sprintf("%s%s?key=%s", baseAddress, apiBasePath, teamName)
+		log.Printf("Testing URL: %s", url)
 
-func checkDistribution(t *testing.T) {
-	servers := make(map[string]bool)
+		resp, err := client.Get(url)
+		require.NoError(t, err, "Failed to make request for team key")
+		defer resp.Body.Close()
 
-	for i := 1; i <= numIterations; i++ {
-		url := buildURL(i)
-		server := getServerForRequest(t, url)
-		servers[server] = true
-	}
+		require.Equal(t, http.StatusOK, resp.StatusCode, "Expected status OK for team key")
 
-	assert.Greater(t, len(servers), 1, "Expected >1 server, got %d", len(servers))
-}
+		bodyBytes, err := io.ReadAll(resp.Body)
+		require.NoError(t, err, "Failed to read response body for team key")
+		require.NotEmpty(t, bodyBytes, "Expected non-empty response body for team key")
 
-func checkConsistency(t *testing.T) {
-	url := buildURL(1)
-	firstServer := getServerForRequest(t, url)
+		var apiResp ApiDataResponse
+		err = json.Unmarshal(bodyBytes, &apiResp)
+		require.NoError(t, err, "Failed to unmarshal JSON response for team key")
 
-	for i := 0; i < numIterations; i++ {
-		currentServer := getServerForRequest(t, url)
-		assert.Equal(t, firstServer, currentServer, "Expected the same server, got different servers")
-	}
+		assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, apiResp.Data, "Data field should be a date string YYYY-MM-DD")
+		log.Printf("Received data for team key '%s': %s", teamName, apiResp.Data)
+	})
+
+	t.Run("DistributionForSinglePath", func(t *testing.T) {
+		servers := make(map[string]bool)
+		url := fmt.Sprintf("%s%s?key=%s", baseAddress, apiBasePath, teamName)
+
+		for i := 1; i <= numIterations; i++ {
+			serverHeader := getServerForRequest(t, url)
+			servers[serverHeader] = true
+		}
+
+		assert.Equal(t, 1, len(servers),
+			"For a balancer hashing r.URL.Path, and a single path, expected 1 server. Got %d. Servers: %v",
+			len(servers), servers)
+		log.Printf("DistributionForSinglePath (key '%s'): %d unique server(s) hit. Servers: %v", teamName, len(servers), servers)
+	})
+
+	t.Run("ConsistencyForSinglePath", func(t *testing.T) {
+		url := fmt.Sprintf("%s%s?key=%s", baseAddress, apiBasePath, teamName)
+		firstServerHeader := getServerForRequest(t, url)
+
+		for i := 0; i < numIterations; i++ {
+			currentServerHeader := getServerForRequest(t, url)
+			assert.Equal(t, firstServerHeader, currentServerHeader,
+				"For a balancer hashing r.URL.Path, and a single path, expected the same server. Iteration %d", i)
+		}
+		log.Printf("ConsistencyForSinglePath (key '%s'): All requests hit server '%s'", teamName, firstServerHeader)
+	})
 }
 
 func getServerForRequest(t *testing.T, url string) string {
 	resp, err := client.Get(url)
-	require.NoError(t, err, "Failed to make request")
-	defer resp.Body.Close()
+	require.NoError(t, err, "Failed to make request to URL: %s", url)
+	if resp.Body != nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Expected status OK for URL: %s", url)
 
 	server := resp.Header.Get("lb-from")
-	require.NotEmpty(t, server, "Expected 'lb-from' header to be set")
-
+	require.NotEmpty(t, server, "Expected 'lb-from' header to be set for URL: %s", url)
 	return server
-}
-
-func buildURL(id int) string {
-	return fmt.Sprintf("%s%s%d", baseAddress, apiPath, id)
 }
 
 func BenchmarkBalancer(b *testing.B) {
@@ -72,12 +103,29 @@ func BenchmarkBalancer(b *testing.B) {
 		b.Skip("Integration test is not enabled")
 	}
 
-	b.ResetTimer()
+	url := fmt.Sprintf("%s%s?key=%s", baseAddress, apiBasePath, teamName)
+	respSetup, errSetup := client.Get(url)
+	if errSetup != nil || respSetup.StatusCode != http.StatusOK {
+		b.Fatalf("Failed to setup data for benchmark: %v, status: %d", errSetup, respSetup.StatusCode)
+	}
+	if respSetup.Body != nil {
+		io.Copy(io.Discard, respSetup.Body)
+		respSetup.Body.Close()
+	}
 
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		url := buildURL(i)
 		resp, err := client.Get(url)
-		require.NoError(b, err)
-		resp.Body.Close()
+		if err != nil {
+			b.Error(err)
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			b.Errorf("Expected status 200, got %d for URL %s", resp.StatusCode, url)
+		}
+		if resp.Body != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
 }

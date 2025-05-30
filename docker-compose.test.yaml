@@ -10,27 +10,48 @@ services:
       - server2
       - server3
       - balancer
+      - db
 
   balancer:
     build: .
     command: ["lb", "--trace=true"]
     networks:
       - servers
+    depends_on:
+      - server1
+      - server2
+      - server3
+      - db
+
+  db:
+    build: .
+    command: "db"
+    networks:
+      - servers
 
   server1:
     build: .
+    command: "server"
     networks:
       - servers
+    depends_on:
+      - db
 
   server2:
     build: .
+    command: "server"
     networks:
       - servers
+    depends_on:
+      - db
 
   server3:
     build: .
+    command: "server"
     networks:
       - servers
+    depends_on:
+      - db
 
 networks:
   servers:
