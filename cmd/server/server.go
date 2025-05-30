@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	// "net/url" // Поки не потрібен, але може знадобитися для PathEscape, якщо ключі складні
 	"os"
 	"strconv"
 	"time"
@@ -23,7 +22,7 @@ const confHealthFailure = "CONF_HEALTH_FAILURE"
 
 const teamName = "faang"
 
-const dbServiceAddress = "http://db:8083" // Переконайся, що це порт твого db-сервісу
+const dbServiceAddress = "http://db:8083"
 
 type DbPostRequest struct {
 	Value string `json:"value"`
@@ -73,16 +72,9 @@ func main() {
 			return
 		}
 
-		// --- ЗМІНА ТУТ ---
-		// Старий варіант: dbURL := fmt.Sprintf("%s/db/?key=%s", dbServiceAddress, requestKey)
-		// Новий варіант для GET /db/<key>:
-		// Якщо requestKey може містити спецсимволи, які ламають URL шлях (наприклад, '/', '?'),
-		// то потрібно використовувати url.PathEscape(requestKey).
-		// Для простих ключів типу "faang" це не обов'язково.
 		dbURL := fmt.Sprintf("%s/db/%s", dbServiceAddress, requestKey)
-		// --- КІНЕЦЬ ЗМІНИ ---
 
-		log.Printf("Querying DB service at URL: %s", dbURL) // Додав лог для відладки
+		log.Printf("Querying DB service at URL: %s", dbURL)
 
 		resp, err := http.DefaultClient.Get(dbURL)
 		if err != nil {
@@ -128,8 +120,6 @@ func main() {
 }
 
 func initializeDataInDB() {
-	// Зачекаємо трохи, щоб дати сервісу db час на запуск.
-	// В ідеалі, тут потрібен механізм retry або перевірка доступності.
 	time.Sleep(5 * time.Second)
 
 	currentDate := time.Now().Format("2006-01-02")
@@ -142,7 +132,6 @@ func initializeDataInDB() {
 		return
 	}
 
-	// URL для POST /db/<teamName> - тут все правильно, ключ в шляху.
 	dbURL := fmt.Sprintf("%s/db/%s", dbServiceAddress, dbKey)
 	req, err := http.NewRequest(http.MethodPost, dbURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
@@ -158,7 +147,7 @@ func initializeDataInDB() {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated { // Додав перевірку на 201 Created
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Printf("DB service returned non-OK status for initial POST: %d. URL: %s", resp.StatusCode, dbURL)
 		return
 	}
