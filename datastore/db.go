@@ -1,10 +1,8 @@
 package datastore
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +32,7 @@ type Db struct {
 	mu            sync.RWMutex
 	segments      []*segment
 	index         hashIndex
+	rw            readWorkers
 }
 
 func Open(dir string) (*Db, error) {
@@ -41,6 +40,7 @@ func Open(dir string) (*Db, error) {
 		dir:      dir,
 		segments: []*segment{},
 		index:    make(hashIndex),
+		rw:       newReadWorkers(),
 	}
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -83,6 +83,7 @@ func Open(dir string) (*Db, error) {
 
 func (db *Db) Close() error {
 	db.mu.Lock()
+	db.rw.clear()
 	return db.activeSegment.Close()
 }
 
@@ -105,25 +106,7 @@ func (db *Db) Get(key string) (string, error) {
 		}
 	}
 
-	f, err := os.Open(loc.segment.path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	_, err = f.Seek(loc.offset, io.SeekStart)
-	if err != nil {
-		return "", err
-	}
-
-	reader := bufio.NewReader(f)
-	var e entry
-	_, err = e.DecodeFromReader(reader)
-	if err != nil {
-		return "", err
-	}
-
-	return e.value, nil
+	return db.rw.get(loc)
 }
 
 func (db *Db) Put(key, value string) error {

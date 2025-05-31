@@ -42,12 +42,16 @@ func (seg *segment) activate() (activeSegment, error) {
 	if err != nil {
 		return activeSegment{}, err
 	}
+	stat, err := f.Stat()
+	if err != nil {
+		return activeSegment{}, err
+	}
 
 	return activeSegment{
 		segment:     seg,
 		WriteCloser: f,
 		index:       make(map[string]int64),
-		size:        0,
+		size:        stat.Size(),
 	}, nil
 }
 
@@ -71,12 +75,10 @@ func (db *Db) recoverSegment(path string) error {
 	seg := &segment{
 		path: path,
 	}
-	db.segments = append(db.segments, seg)
 
 	reader := bufio.NewReader(f)
 	var offset int64
 	for {
-		pos := offset
 		var e entry
 		n, err := e.DecodeFromReader(reader)
 		if err != nil {
@@ -88,10 +90,15 @@ func (db *Db) recoverSegment(path string) error {
 			}
 			return err
 		}
-		db.index[e.key] = recordLocation{segment: seg, offset: pos}
+		db.index[e.key] = recordLocation{segment: seg, offset: offset}
 		offset += int64(n)
 	}
-	db.activeSegment.size = offset
+
+	err = db.rw.addWorker(seg)
+	if err != nil {
+		return fmt.Errorf("failed to add read worker: %w", err)
+	}
+	db.segments = append(db.segments, seg)
 
 	return nil
 }
@@ -101,6 +108,11 @@ func (db *Db) initNextSegment() error {
 	if err != nil {
 		return err
 	}
+	err = db.rw.addWorker(active.segment)
+	if err != nil {
+		return fmt.Errorf("failed to add read worker: %w", err)
+	}
+	db.segments = append(db.segments, active.segment)
 
 	for key, offset := range db.activeSegment.index {
 		db.index[key] = recordLocation{
@@ -109,7 +121,6 @@ func (db *Db) initNextSegment() error {
 		}
 	}
 
-	db.segments = append(db.segments, active.segment)
 	db.activeSegment = active
 
 	return nil
@@ -150,6 +161,7 @@ func (db *Db) lockMergeSegments() {
 	}
 
 	for _, seg := range oldSegments {
+		db.rw.deleteWorker(seg)
 		if err := os.Remove(seg.path); err != nil {
 			fmt.Printf("MergeSegments: failed to delete old segments: %v\n", err)
 		}
@@ -157,9 +169,13 @@ func (db *Db) lockMergeSegments() {
 
 	err = mergedSeg.rename("0")
 	if err != nil {
-		fmt.Printf("MergeSegments: failed to rename merged segments: %v\n", err)
+		fmt.Printf("MergeSegments: failed to rename merged segment: %v\n", err)
 	}
 
+	err = db.rw.addWorker(mergedSeg.segment)
+	if err != nil {
+		fmt.Printf("MergeSegments: failed to add merged segment in workers: %v\n", err)
+	}
 	copy(db.segments, []*segment{mergedSeg.segment, db.segments[len(db.segments)-1]})
 	db.segments = db.segments[:2]
 	db.index = newIndex
