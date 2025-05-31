@@ -33,6 +33,7 @@ type DbGetResponse struct {
 	Value string `json:"value"`
 }
 
+// main initializes HTTP routes, applies optional delays/failures, and starts the server.
 func main() {
 	flag.Parse()
 

@@ -98,6 +98,7 @@ func getServerForRequest(t *testing.T, url string) string {
 	return server
 }
 
+// BenchmarkBalancer measures request performance to the load balancer under repeated access.
 func BenchmarkBalancer(b *testing.B) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		b.Skip("Integration test is not enabled")
