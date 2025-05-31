@@ -7,110 +7,171 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
-const outFileName = "current-data"
+const (
+	segmentPrefix = "segment-"
+)
 
-var ErrNotFound = fmt.Errorf("record does not exist")
+var (
+	SegmentSizeLimit = int64(10 * 1024 * 1024)
+)
 
-type hashIndex map[string]int64
+var ErrNotFound = errors.New("record does not exist")
+
+type hashIndex map[string]recordLocation
+
+type recordLocation struct {
+	segment *segment
+	offset  int64
+}
 
 type Db struct {
-	out       *os.File
-	outOffset int64
-
-	index hashIndex
+	dir           string
+	activeSegment activeSegment
+	mu            sync.Mutex
+	segments      []*segment
+	index         hashIndex
 }
 
 func Open(dir string) (*Db, error) {
-	outputPath := filepath.Join(dir, outFileName)
-	f, err := os.OpenFile(outputPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	db := &Db{
+		dir:      dir,
+		segments: []*segment{},
+		index:    make(hashIndex),
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	db := &Db{
-		out:   f,
-		index: make(hashIndex),
+
+	for _, file := range files {
+		name := file.Name()
+		if !strings.HasPrefix(name, segmentPrefix) {
+			continue
+		}
+
+		path := filepath.Join(db.dir, name)
+		err := db.recoverSegment(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to recover %s: %w", name, err)
+		}
 	}
-	err = db.recover()
-	if err != nil && err != io.EOF {
-		return nil, err
+
+	if len(db.segments) > 0 {
+		last := db.segments[len(db.segments)-1]
+		active, err := last.activate()
+		if err != nil {
+			return nil, err
+		}
+		db.activeSegment = active
+	} else {
+		if err := db.initNextSegment(); err != nil {
+			return nil, err
+		}
 	}
+
 	return db, nil
 }
 
-func (db *Db) recover() error {
-	f, err := os.Open(db.out.Name())
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	in := bufio.NewReader(f)
-	for err == nil {
-		var (
-			record entry
-			n      int
-		)
-		n, err = record.DecodeFromReader(in)
-		if errors.Is(err, io.EOF) {
-			if n != 0 {
-				return fmt.Errorf("corrupted file")
-			}
-			break
-		}
-
-		db.index[record.key] = db.outOffset
-		db.outOffset += int64(n)
-	}
-	return err
-}
-
 func (db *Db) Close() error {
-	return db.out.Close()
+	db.mu.Lock()
+	return db.activeSegment.Close()
 }
 
 func (db *Db) Get(key string) (string, error) {
-	position, ok := db.index[key]
-	if !ok {
-		return "", ErrNotFound
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var loc recordLocation
+
+	offset, ok := db.activeSegment.index[key]
+	if ok {
+		loc = recordLocation{
+			segment: db.activeSegment.segment,
+			offset:  offset,
+		}
+	} else {
+		loc, ok = db.index[key]
+		if !ok {
+			return "", ErrNotFound
+		}
 	}
 
-	file, err := os.Open(db.out.Name())
+	f, err := os.Open(loc.segment.path)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer f.Close()
 
-	_, err = file.Seek(position, 0)
+	_, err = f.Seek(loc.offset, io.SeekStart)
 	if err != nil {
 		return "", err
 	}
 
-	var record entry
-	if _, err = record.DecodeFromReader(bufio.NewReader(file)); err != nil {
+	reader := bufio.NewReader(f)
+	var e entry
+	_, err = e.DecodeFromReader(reader)
+	if err != nil {
 		return "", err
 	}
-	return record.value, nil
+
+	return e.value, nil
 }
 
 func (db *Db) Put(key, value string) error {
+	db.mu.Lock()
+
 	e := entry{
 		key:   key,
 		value: value,
 	}
-	n, err := db.out.Write(e.Encode())
-	if err == nil {
-		db.index[key] = db.outOffset
-		db.outOffset += int64(n)
+	data := e.Encode()
+
+	if db.activeSegment.size+int64(len(data)) > SegmentSizeLimit {
+		db.activeSegment.Close()
+		if err := db.initNextSegment(); err != nil {
+			db.mu.Unlock()
+			return err
+		}
 	}
-	return err
+
+	n, err := db.activeSegment.Write(data)
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+
+	db.activeSegment.index[key] = db.activeSegment.size
+	db.activeSegment.size += int64(n)
+
+	if len(db.segments) >= 3 {
+		go db.lockMergeSegments()
+	} else {
+		db.mu.Unlock()
+	}
+
+	return nil
 }
 
 func (db *Db) Size() (int64, error) {
-	info, err := db.out.Stat()
-	if err != nil {
-		return 0, err
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var total int64
+	for _, seg := range db.segments {
+		info, err := os.Stat(seg.path)
+		if err != nil {
+			return 0, err
+		}
+		total += info.Size()
 	}
-	return info.Size(), nil
+	return total, nil
 }

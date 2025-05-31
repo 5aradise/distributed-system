@@ -1,11 +1,15 @@
 package datastore
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 )
 
 func TestDb(t *testing.T) {
 	tmp := t.TempDir()
+	SegmentSizeLimit = 1024
 	db, err := Open(tmp)
 	if err != nil {
 		t.Fatal(err)
@@ -14,15 +18,19 @@ func TestDb(t *testing.T) {
 		_ = db.Close()
 	})
 
-	pairs := [][]string{
+	pairs := [][2]string{
 		{"k1", "v1"},
 		{"k2", "v2"},
 		{"k3", "v3"},
 		{"k2", "v2.1"},
+		{"k4", "v4"},
+		{"k5", "v5"},
+		{"k6", "v6"},
+		{"k5", "v5.1"},
 	}
 
 	t.Run("put/get", func(t *testing.T) {
-		for _, pair := range pairs {
+		for _, pair := range pairs[:4] {
 			err := db.Put(pair[0], pair[1])
 			if err != nil {
 				t.Errorf("Cannot put %s: %s", pairs[0], err)
@@ -42,7 +50,8 @@ func TestDb(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, pair := range pairs {
+
+		for _, pair := range pairs[4:] {
 			err := db.Put(pair[0], pair[1])
 			if err != nil {
 				t.Errorf("Cannot put %s: %s", pairs[0], err)
@@ -81,4 +90,55 @@ func TestDb(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestMergeSegments(t *testing.T) {
+	tmp := t.TempDir()
+	SegmentSizeLimit = 64
+	db, err := Open(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for i := range 10 {
+		key := fmt.Sprintf("key%d", i%3)
+		value := fmt.Sprintf("value%d", i)
+		if err := db.Put(key, value); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	expected := map[string]string{
+		"key0": "value9",
+		"key1": "value7",
+		"key2": "value8",
+	}
+
+	for k, v := range expected {
+		got, err := db.Get(k)
+		if err != nil {
+			t.Errorf("Get(%q) failed: %v", k, err)
+			continue
+		}
+		if got != v {
+			t.Errorf("Get(%q) = %q; want %q", k, got, v)
+		}
+	}
+
+	files, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("Failed to read dir: %v", err)
+	}
+
+	segmentCount := 0
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), segmentPrefix) {
+			segmentCount++
+		}
+	}
+
+	if segmentCount < 2 {
+		t.Errorf("Expected multiple segments, got %d", segmentCount)
+	}
 }
