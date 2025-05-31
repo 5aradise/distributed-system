@@ -31,7 +31,7 @@ type recordLocation struct {
 type Db struct {
 	dir           string
 	activeSegment activeSegment
-	mu            sync.Mutex
+	mu            sync.RWMutex
 	segments      []*segment
 	index         hashIndex
 }
@@ -87,8 +87,8 @@ func (db *Db) Close() error {
 }
 
 func (db *Db) Get(key string) (string, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	var loc recordLocation
 
