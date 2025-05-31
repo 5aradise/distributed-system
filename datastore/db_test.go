@@ -5,12 +5,12 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestDb(t *testing.T) {
 	tmp := t.TempDir()
-	db, err := Open(tmp, 10)
+	SegmentSizeLimit = 1024
+	db, err := Open(tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,15 +18,19 @@ func TestDb(t *testing.T) {
 		_ = db.Close()
 	})
 
-	pairs := [][]string{
+	pairs := [][2]string{
 		{"k1", "v1"},
 		{"k2", "v2"},
 		{"k3", "v3"},
 		{"k2", "v2.1"},
+		{"k4", "v4"},
+		{"k5", "v5"},
+		{"k6", "v6"},
+		{"k5", "v5.1"},
 	}
 
 	t.Run("put/get", func(t *testing.T) {
-		for _, pair := range pairs {
+		for _, pair := range pairs[:4] {
 			err := db.Put(pair[0], pair[1])
 			if err != nil {
 				t.Errorf("Cannot put %s: %s", pairs[0], err)
@@ -46,7 +50,8 @@ func TestDb(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, pair := range pairs {
+
+		for _, pair := range pairs[4:] {
 			err := db.Put(pair[0], pair[1])
 			if err != nil {
 				t.Errorf("Cannot put %s: %s", pairs[0], err)
@@ -65,7 +70,7 @@ func TestDb(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		db, err = Open(tmp, 5)
+		db, err = Open(tmp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,21 +94,20 @@ func TestDb(t *testing.T) {
 
 func TestMergeSegments(t *testing.T) {
 	tmp := t.TempDir()
-	db, err := Open(tmp, 50)
+	SegmentSizeLimit = 64
+	db, err := Open(tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := fmt.Sprintf("key%d", i%3)
 		value := fmt.Sprintf("value%d", i)
 		if err := db.Put(key, value); err != nil {
 			t.Fatalf("Put failed: %v", err)
 		}
 	}
-
-	time.Sleep(500 * time.Millisecond)
 
 	expected := map[string]string{
 		"key0": "value9",
@@ -129,7 +133,7 @@ func TestMergeSegments(t *testing.T) {
 
 	segmentCount := 0
 	for _, f := range files {
-		if strings.HasPrefix(f.Name(), "segment-") {
+		if strings.HasPrefix(f.Name(), segmentPrefix) {
 			segmentCount++
 		}
 	}
