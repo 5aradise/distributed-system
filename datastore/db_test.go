@@ -94,7 +94,7 @@ func TestDb(t *testing.T) {
 
 func TestMergeSegments(t *testing.T) {
 	tmp := t.TempDir()
-	SegmentSizeLimit = 64
+	SegmentSizeLimit = 12
 	db, err := Open(tmp)
 	if err != nil {
 		t.Fatal(err)
